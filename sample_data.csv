@@ -1,0 +1,6 @@
+project_name,genre,audience,platform,budget,expected_views,actual_views,revenue,cost,retention,status,format,duration_days,notes
+Travel Mini Docs,Documentary,Travelers,YouTube,2500,150000,138000,4200,2300,0.63,Published,Short Form,14,Strong performance on travel topics
+Startup Stories,Branded Content,Entrepreneurs,LinkedIn,5200,90000,76000,10700,4900,0.48,Published,Long Form,21,Good lead conversion
+DIY Tech Tips,How-To,Tech Enthusiasts,YouTube Shorts,1200,250000,290000,3100,1050,0.71,Published,Short Form,7,High retention good CTR
+Behind the Scenes,Entertainment,General Audience,Instagram,1800,70000,59000,2400,1700,0.42,Planning,Short Form,10,Needs stronger hooks
+Business Interviews,Interview,Professionals,YouTube,7500,200000,174000,18300,6600,0.58,Published,Long Form,18,Strong sponsorship potential
