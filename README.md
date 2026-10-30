@@ -12,10 +12,17 @@ try:
 except Exception:  # pragma: no cover
     OpenAI = None
 
+try:
+    from streamlit_audiorecorder import st_audiorecorder
+except Exception:  # pragma: no cover
+    st_audiorecorder = None
+
 DB_PATH = "video_business_ai.db"
 
 
-# --- DB setup ---
+# ----------------------------
+# Database helpers
+# ----------------------------
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -46,6 +53,7 @@ def init_db():
         )
         """
     )
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS distribution_channels (
@@ -61,6 +69,7 @@ def init_db():
         )
         """
     )
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS rights (
@@ -75,6 +84,7 @@ def init_db():
         )
         """
     )
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS tasks (
@@ -234,7 +244,6 @@ def seed_sample_data():
     conn.close()
 
 
-# --- Data loaders ---
 def fetch_projects():
     conn = get_conn()
     df = pd.read_sql_query("SELECT * FROM projects ORDER BY created_at DESC", conn)
@@ -469,7 +478,7 @@ def generate_ai_insights(df):
     if df.empty:
         return "No data available for insights."
 
-    if os.environ.get("OPENAI_API_KEY"):
+    if os.environ.get("OPENAI_API_KEY") and OpenAI is not None:
         try:
             client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
             narrative = (
@@ -507,7 +516,62 @@ def generate_ai_insights(df):
     ])
 
 
-# --- UI rendering ---
+# --- Voice functions ---
+def execute_voice_command(command: str, df: pd.DataFrame) -> str:
+    lower = command.lower()
+    if df.empty:
+        return "There is no project data loaded yet. Please import a dataset or add a project first."
+
+    if any(k in lower for k in ["revenue", "money", "earnings"]):
+        total_revenue = float(df["revenue"].sum()) if "revenue" in df.columns else 0
+        return f"Your total revenue is ${total_revenue:,.0f}."
+
+    if any(k in lower for k in ["top project", "top projects", "best project", "priority project"]):
+        scored = analyze_projects(df)
+        if scored.empty:
+            return "There are no projects to rank."
+        top = scored.iloc[0]
+        return f"The highest priority project is {top['project_name']} with a score of {top['score']}."
+
+    if any(k in lower for k in ["show platform", "distribution", "platform summary"]):
+        summary = df.groupby("platform").agg(revenue=("revenue", "sum"), views=("actual_views", "sum")).reset_index()
+        if summary.empty:
+            return "There is no platform performance data yet."
+        top = summary.sort_values("revenue", ascending=False).iloc[0]
+        return f"The strongest platform is {top['platform']} with ${top['revenue']:,.0f} in revenue."
+
+    if any(k in lower for k in ["tasks", "task"]):
+        tasks = fetch_tasks()
+        if tasks.empty:
+            return "You do not have any tasks assigned yet."
+        next_task = tasks.sort_values("due_date").iloc[0]
+        return f"Your next task is {next_task['task_name']} due on {next_task['due_date']} for {next_task['assignee']}."
+
+    if any(k in lower for k in ["add project", "new project"]):
+        return "I can help with that. Please use the project form in the Projects tab or tell me the project name, audience, and platform."
+
+    if any(k in lower for k in ["strategy", "insight", "summary"]):
+        return generate_ai_insights(df)
+
+    return "I heard: " + command + ". I can show revenue, project priority, platform performance, task status, or strategy insights."
+
+
+def speak_response(response_text: str):
+    safe_text = response_text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    html = f"""
+    <script>
+    var speech = new SpeechSynthesisUtterance("{safe_text}");
+    speech.lang = 'en-US';
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(speech);
+    </script>
+    """
+    st.components.v1.html(html, height=0)
+
+
+# ----------------------------
+# UI helpers
+# ----------------------------
 def render_kpi_cards(df):
     if df.empty:
         st.info("No project data loaded yet.")
@@ -731,6 +795,52 @@ def render_import_data():
             st.error(f"Import failed: {e}")
 
 
+def render_voice_assistant():
+    st.subheader("Voice assistant")
+    if st_audiorecorder is None:
+        st.warning("Voice input is not available in this environment. Install the audio recorder package and use the app in a browser with microphone access.")
+        command = st.text_input("Or type a command", placeholder="Example: show revenue")
+        if command:
+            response = execute_voice_command(command, fetch_projects())
+            st.success(response)
+            speak_response(response)
+        return
+
+    audio = st_audiorecorder("Tap and talk", key="voice_input")
+    if audio is not None:
+        wav_bytes = audio.export(format="wav").read()
+        st.audio(wav_bytes, format="audio/wav")
+
+        if not os.environ.get("OPENAI_API_KEY"):
+            st.info("Add your OpenAI API key in the sidebar to enable automatic transcription. For now, type a command below.")
+            command = st.text_input("Type a command", placeholder="Example: show revenue")
+            if command:
+                response = execute_voice_command(command, fetch_projects())
+                st.success(response)
+                speak_response(response)
+            return
+
+        try:
+            client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=("voice.wav", wav_bytes, "audio/wav"),
+            )
+            command = transcript.text
+            st.write("You said:", command)
+            response = execute_voice_command(command, fetch_projects())
+            st.success(response)
+            speak_response(response)
+        except Exception as e:
+            st.warning(f"Voice transcription failed: {e}")
+
+    command = st.text_input("Type a command instead", placeholder="Example: show top projects")
+    if command:
+        response = execute_voice_command(command, fetch_projects())
+        st.success(response)
+        speak_response(response)
+
+
 def main():
     st.set_page_config(page_title="Advanced Video Business AI", layout="wide")
     init_db()
@@ -741,7 +851,7 @@ def main():
 
     with st.sidebar:
         st.header("Controls")
-        st.write("Optional: add your OpenAI API key for richer AI summaries.")
+        st.write("Optional: add your OpenAI API key for richer AI summaries and live voice transcription.")
         openai_key = st.text_input("OpenAI API key", type="password", help="Optional. Leave blank to use built-in analysis.")
         if openai_key:
             os.environ["OPENAI_API_KEY"] = openai_key
@@ -750,6 +860,7 @@ def main():
         st.write("No external setup needed to get started.")
 
     df = fetch_projects()
+    render_voice_assistant()
     tabs = st.tabs(["Overview", "Projects", "Pipeline", "Distribution", "Rights", "AI Insights", "Import"])
 
     with tabs[0]:
